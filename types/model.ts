@@ -21,8 +21,9 @@ export type AspectRatio = '16:9' | '9:16' | '1:1';
  * 图片模型 API 协议类型
  * gemini: Google generateContent 风格
  * openai: OpenAI Images API 风格
+ * agnes: Agnes AI extra_body 风格
  */
-export type ImageApiFormat = 'gemini' | 'openai';
+export type ImageApiFormat = 'gemini' | 'openai' | 'agnes';
 
 /**
  * 视频时长类型（仅异步视频模式支持）
@@ -256,6 +257,15 @@ export const DEFAULT_IMAGE_PARAMS_OPENAI: ImageModelParams = {
 };
 
 /**
+ * Agnes AI Images API 默认参数
+ */
+export const DEFAULT_IMAGE_PARAMS_AGNES: ImageModelParams = {
+  defaultAspectRatio: '16:9',
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  apiFormat: 'agnes',
+};
+
+/**
  * 默认视频模型参数 (Veo 首尾帧模式)
  */
 export const DEFAULT_VIDEO_PARAMS_VEO: VideoModelParams = {
@@ -352,7 +362,7 @@ export const BUILTIN_CHAT_MODELS: ChatModelDefinition[] = [
     isEnabled: true,
     params: { ...DEFAULT_CHAT_PARAMS },
   },
- 
+
   {
     id: 'gpt-5.4',
     name: 'GPT-5.4',
@@ -399,6 +409,30 @@ export const BUILTIN_CHAT_MODELS: ChatModelDefinition[] = [
     type: 'chat',
     providerId: 'antsk',
     description: '多模态预览模型：支持超长上下文与复杂推理，适合文档理解、研究分析与工具增强流程',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_CHAT_PARAMS },
+  },
+  {
+    id: 'agnes-2.0-flash',
+    apiModel: 'agnes-2.0-flash',
+    name: 'Agnes 2.0 Flash',
+    type: 'chat',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/chat/completions',
+    description: 'Agnes AI 高性能对话模型：快速响应，适合日常对话与内容生成',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_CHAT_PARAMS },
+  },
+  {
+    id: 'agnes-1.5-flash',
+    apiModel: 'agnes-1.5-flash',
+    name: 'Agnes 1.5 Flash',
+    type: 'chat',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/chat/completions',
+    description: 'Agnes AI 轻量对话模型：快速且经济，适合批量处理与高频调用',
     isBuiltIn: true,
     isEnabled: true,
     params: { ...DEFAULT_CHAT_PARAMS },
@@ -454,6 +488,30 @@ export const BUILTIN_IMAGE_MODELS: ImageModelDefinition[] = [
     isBuiltIn: true,
     isEnabled: true,
     params: { ...DEFAULT_IMAGE_PARAMS_OPENAI },
+  },
+  {
+    id: 'agnes-image-2.1-flash',
+    apiModel: 'agnes-image-2.1-flash',
+    name: 'Agnes Image 2.1 Flash',
+    type: 'image',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/images/generations',
+    description: 'Agnes AI 最新图片生成模型：高质量图像生成，支持图生图，适合创意设计',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_IMAGE_PARAMS_AGNES },
+  },
+  {
+    id: 'agnes-image-2.0-flash',
+    apiModel: 'agnes-image-2.0-flash',
+    name: 'Agnes Image 2.0 Flash',
+    type: 'image',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/images/generations',
+    description: 'Agnes AI 图片生成模型：快速生成，支持图生图，性价比高',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_IMAGE_PARAMS_AGNES },
   },
 ];
 
@@ -519,6 +577,18 @@ export const BUILTIN_VIDEO_MODELS: VideoModelDefinition[] = [
     isEnabled: true,
     params: { ...DEFAULT_VIDEO_PARAMS_DOUBAO_SEEDANCE_2_0 },
   },
+  {
+    id: 'agnes-video-v2.0',
+    apiModel: 'agnes-video-v2.0',
+    name: 'Agnes Video v2.0',
+    type: 'video',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/videos',
+    description: 'Agnes AI 视频生成模型：支持文生视频、图生视频、关键帧动画，异步任务模式',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_VIDEO_PARAMS_SORA },
+  },
 ];
 
 /**
@@ -561,6 +631,14 @@ export const BUILTIN_PROVIDERS: ModelProvider[] = [
     baseUrl: 'https://api.antsk.cn',
     isBuiltIn: true,
     isDefault: true,
+  },
+  {
+    id: 'agnes-ai',
+    name: 'Agnes AI Hub',
+    baseUrl: 'https://apihub.agnes-ai.com',
+    apiKey: 'sk-wjXEVQI7Q8M4SMaaLRADScoGb2K7nFpH0Qh0QxqcEIW3TzFs',
+    isBuiltIn: true,
+    isDefault: false,
   },
   {
     id: 'volcengine',

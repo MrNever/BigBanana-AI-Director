@@ -23,9 +23,15 @@ const SORA_COMPATIBLE_VIDEO_MODELS = new Set([
   'sora-2',
   'doubao-seedance-1-5-pro',
 ]);
+const AGNES_VIDEO_MODELS = new Set([
+  'agnes-video-v2.0',
+]);
 
 const isSoraCompatibleVideoModel = (modelName: string): boolean =>
   SORA_COMPATIBLE_VIDEO_MODELS.has((modelName || '').trim().toLowerCase());
+
+const isAgnesVideoModel = (modelName: string): boolean =>
+  AGNES_VIDEO_MODELS.has((modelName || '').trim().toLowerCase());
 
 const toFriendlyVideoErrorMessage = (message: string): string =>
   toFriendlyModerationMessage(message) || message;
@@ -92,47 +98,84 @@ const generateVideoAsync = async (
   console.log(`📐 视频尺寸: ${VIDEO_WIDTH}x${VIDEO_HEIGHT}`);
 
   const apiBase = getApiBase('video', resolvedModelName);
+  const isAgnes = isAgnesVideoModel(resolvedModelName);
 
   // Step 1: 创建视频任务
-  const formData = new FormData();
-  formData.append('model', resolvedModelName);
-  formData.append('prompt', prompt);
-  formData.append('seconds', String(duration));
-  formData.append('size', videoSize);
+  let createResponse: Response;
 
-  const appendReference = async (base64: string, filename: string, fieldName: string) => {
-    const cleanBase64 = base64.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
-    console.log(`📐 调整参考图片尺寸至 ${VIDEO_WIDTH}x${VIDEO_HEIGHT}...`);
-    const resizedBase64 = await resizeImageToSize(cleanBase64, VIDEO_WIDTH, VIDEO_HEIGHT);
-    const byteCharacters = atob(resizedBase64);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
+  if (isAgnes) {
+    // Agnes AI 使用 JSON 格式
+    console.log('🎬 使用 Agnes AI JSON 格式创建任务...');
+
+    const requestBody: any = {
+      model: resolvedModelName,
+      prompt: prompt,
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      num_frames: Math.min(Math.floor((duration * 24 - 1) / 8) * 8 + 1, 441), // 遵循 8n+1 规则
+      frame_rate: 24,
+    };
+
+    // Agnes AI: 单图用 image，多图用 extra_body.image + mode: keyframes
+    if (references.length >= 2) {
+      requestBody.extra_body = {
+        image: references,
+        mode: 'keyframes',
+      };
+    } else if (references.length === 1) {
+      requestBody.image = references[0];
     }
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: 'image/png' });
-    formData.append(fieldName, blob, filename);
-  };
 
-  if (useReferenceArray && references.length >= 2) {
-    const limited = references.slice(0, 2);
-    await appendReference(limited[0], 'reference-start.png', 'input_reference[]');
-    await appendReference(limited[1], 'reference-end.png', 'input_reference[]');
-  } else if (references.length >= 1) {
-    await appendReference(references[0], 'reference.png', 'input_reference');
+    createResponse = await fetch(`${apiBase}/v1/videos`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+  } else {
+    // Sora/Gemini 使用 FormData
+    const formData = new FormData();
+    formData.append('model', resolvedModelName);
+    formData.append('prompt', prompt);
+    formData.append('seconds', String(duration));
+    formData.append('size', videoSize);
+
+    const appendReference = async (base64: string, filename: string, fieldName: string) => {
+      const cleanBase64 = base64.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
+      console.log(`📐 调整参考图片尺寸至 ${VIDEO_WIDTH}x${VIDEO_HEIGHT}...`);
+      const resizedBase64 = await resizeImageToSize(cleanBase64, VIDEO_WIDTH, VIDEO_HEIGHT);
+      const byteCharacters = atob(resizedBase64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'image/png' });
+      formData.append(fieldName, blob, filename);
+    };
+
+    if (useReferenceArray && references.length >= 2) {
+      const limited = references.slice(0, 2);
+      await appendReference(limited[0], 'reference-start.png', 'input_reference[]');
+      await appendReference(limited[1], 'reference-end.png', 'input_reference[]');
+    } else if (references.length >= 1) {
+      await appendReference(references[0], 'reference.png', 'input_reference');
+    }
+
+    if (references.length > 0) {
+      console.log('✅ 参考图片已调整尺寸并添加');
+    }
+
+    createResponse = await fetch(`${apiBase}/v1/videos`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: formData
+    });
   }
-
-  if (references.length > 0) {
-    console.log('✅ 参考图片已调整尺寸并添加');
-  }
-
-  const createResponse = await fetch(`${apiBase}/v1/videos`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: formData
-  });
 
   if (!createResponse.ok) {
     if (createResponse.status === 400) {
@@ -154,24 +197,34 @@ const generateVideoAsync = async (
 
   const createData = await createResponse.json();
   const taskId = createData.id || createData.task_id;
+  const videoId = createData.video_id; // Agnes AI 返回 video_id
+
   if (!taskId) {
     throw new Error('创建视频任务失败：未返回任务ID');
   }
 
   console.log(`📋 ${resolvedModelName} 任务已创建，任务ID:`, taskId);
+  if (videoId) {
+    console.log(`📹 视频ID:`, videoId);
+  }
 
   // Step 2: 轮询查询任务状态
   const maxPollingTime = 1200000; // 20分钟超时
   const pollingInterval = 5000;
   const startTime = Date.now();
 
-  let videoId: string | null = null;
+  let finalVideoId: string | null = videoId || null;
   let videoUrlFromStatus: string | null = null;
 
   while (Date.now() - startTime < maxPollingTime) {
     await new Promise(resolve => setTimeout(resolve, pollingInterval));
 
-    const statusResponse = await fetch(`${apiBase}/v1/videos/${taskId}`, {
+    // Agnes AI 使用 /agnesapi?video_id=<VIDEO_ID>
+    const statusUrl = isAgnes && videoId
+      ? `${apiBase}/agnesapi?video_id=${videoId}&model_name=${resolvedModelName}`
+      : `${apiBase}/v1/videos/${taskId}`;
+
+    const statusResponse = await fetch(statusUrl, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
@@ -190,16 +243,23 @@ const generateVideoAsync = async (
     console.log(`🔄 ${resolvedModelName} 任务状态:`, status, '进度:', statusData.progress);
 
     if (status === 'completed' || status === 'succeeded') {
-      videoUrlFromStatus = statusData.video_url || statusData.videoUrl || null;
-      if (statusData.id && statusData.id.startsWith('video_')) {
-        videoId = statusData.id;
+      // Agnes AI: 视频URL在 metadata.url
+      if (isAgnes && statusData.metadata?.url) {
+        videoUrlFromStatus = statusData.metadata.url;
+        console.log('✅ Agnes AI 任务完成，视频URL:', videoUrlFromStatus);
       } else {
-        videoId = statusData.output_video || statusData.video_id || statusData.outputs?.[0]?.id || statusData.id;
+        videoUrlFromStatus = statusData.video_url || statusData.videoUrl || null;
       }
-      if (!videoId && statusData.outputs && statusData.outputs.length > 0) {
-        videoId = statusData.outputs[0];
+
+      if (statusData.id && statusData.id.startsWith('video_')) {
+        finalVideoId = statusData.id;
+      } else {
+        finalVideoId = statusData.output_video || statusData.video_id || statusData.outputs?.[0]?.id || statusData.id;
       }
-      console.log('✅ 任务完成，视频ID:', videoId);
+      if (!finalVideoId && statusData.outputs && statusData.outputs.length > 0) {
+        finalVideoId = statusData.outputs[0];
+      }
+      console.log('✅ 任务完成，视频ID:', finalVideoId);
       break;
     } else if (status === 'failed' || status === 'error') {
       const errorMessage =
@@ -211,11 +271,11 @@ const generateVideoAsync = async (
     }
   }
 
-  if (!videoId && !videoUrlFromStatus) {
+  if (!finalVideoId && !videoUrlFromStatus) {
     throw new Error('视频生成超时 (20分钟) 或未返回视频ID');
   }
 
-  console.log(`✅ ${resolvedModelName} 视频生成完成，视频ID:`, videoId);
+  console.log(`✅ ${resolvedModelName} 视频生成完成，视频ID:`, finalVideoId);
 
   if (videoUrlFromStatus) {
     return tryConvertVideoUrlToBase64(videoUrlFromStatus, resolvedModelName);
@@ -232,7 +292,7 @@ const generateVideoAsync = async (
       const downloadController = new AbortController();
       const downloadTimeoutId = setTimeout(() => downloadController.abort(), downloadTimeout);
 
-      const downloadResponse = await fetch(`${apiBase}/v1/videos/${videoId}/content`, {
+      const downloadResponse = await fetch(`${apiBase}/v1/videos/${finalVideoId}/content`, {
         method: 'GET',
         headers: {
           'Accept': '*/*',

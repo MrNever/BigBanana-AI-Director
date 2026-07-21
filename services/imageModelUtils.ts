@@ -7,18 +7,25 @@ export const getImageApiFormat = (
   model?: Partial<ImageModelDefinition> | null
 ): ImageApiFormat => {
   const explicitFormat = model?.params?.apiFormat;
-  if (explicitFormat === 'gemini' || explicitFormat === 'openai') {
+  if (explicitFormat === 'gemini' || explicitFormat === 'openai' || explicitFormat === 'agnes') {
     return explicitFormat;
   }
 
   const endpoint = (model?.endpoint || '').toLowerCase();
   if (endpoint.includes('/images/generations') || endpoint.includes('/images/edits')) {
+    // 检查是否是 Agnes AI 提供商
+    if (model?.providerId === 'agnes-ai') {
+      return 'agnes';
+    }
     return 'openai';
   }
 
   const identity = `${model?.id || ''} ${model?.apiModel || ''} ${model?.name || ''}`.toLowerCase();
   if (identity.includes('gpt-image')) {
     return 'openai';
+  }
+  if (identity.includes('agnes')) {
+    return 'agnes';
   }
 
   return 'gemini';

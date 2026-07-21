@@ -53,7 +53,7 @@ export const generateArtDirection = async (
 
   const stylePrompt = getStylePrompt(visualStyle);
 
-  const prompt = `You are a world-class Art Director for ${visualStyle} productions. 
+  const prompt = `You are a world-class Art Director for ${visualStyle} productions.
 Your job is to create a unified Art Direction Brief that will guide ALL visual prompt generation for characters, scenes, and shots in a single project. This document ensures perfect visual consistency across every generated image.
 
 ## Project Info
@@ -783,7 +783,10 @@ const countEnglishWords = (text: string): number => {
 
 const dataUrlToImageFile = (dataUrl: string, filename: string): File | null => {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-  if (!match) return null;
+  if (!match) {
+    console.warn(`[dataUrlToImageFile] Invalid format for ${filename}: ${dataUrl.substring(0, 100)}...`);
+    return null;
+  }
 
   try {
     const mimeType = match[1];
@@ -792,8 +795,10 @@ const dataUrlToImageFile = (dataUrl: string, filename: string): File | null => {
     for (let i = 0; i < binary.length; i += 1) {
       bytes[i] = binary.charCodeAt(i);
     }
+    console.log(`[dataUrlToImageFile] Successfully converted ${filename}, size: ${bytes.length} bytes`);
     return new File([bytes], filename, { type: mimeType });
-  } catch {
+  } catch (error) {
+    console.error(`[dataUrlToImageFile] Error converting ${filename}:`, error);
     return null;
   }
 };
@@ -1026,9 +1031,20 @@ NEGATIVE PROMPT (strictly avoid): ${compactNegativePrompt}`;
       const response = await retryOperation(async () => {
         let res: Response;
         if (hasOpenAiReferences) {
+          console.log(`[OpenAI] Processing ${openAiReferenceSources.length} reference images...`);
+          openAiReferenceSources.forEach((src, idx) => {
+            const preview = src.substring(0, 100);
+            const format = /^https?:\/\//i.test(src) ? 'URL' :
+                          /^data:image/.test(src) ? 'Base64' : 'Unknown';
+            console.log(`  [${idx + 1}] ${format}: ${preview}...`);
+          });
+
           const files = openAiReferenceSources
             .map((img, index) => dataUrlToImageFile(img, `reference-${index + 1}.png`))
             .filter((file): file is File => Boolean(file));
+
+          console.log(`[OpenAI] Converted ${files.length}/${openAiReferenceSources.length} images to files`);
+
           if (files.length === 0) {
             throw new Error('图片生成失败：参考图格式无效，请重新上传后重试。');
           }
@@ -1098,6 +1114,68 @@ NEGATIVE PROMPT (strictly avoid): ${compactNegativePrompt}`;
       }
 
       throw new Error('图片生成失败：OpenAI Images 未返回有效图片数据。');
+    }
+
+    // Agnes AI protocol (extra_body.image)
+    if (imageApiFormat === 'agnes') {
+      const hasAgnesReferences = effectiveReferenceImages.length > 0;
+      const agnesSize = mapAspectRatioToOpenAiImageSize(aspectRatio);
+
+      const requestBody: any = {
+        model: imageModelId,
+        prompt: finalPrompt,
+        size: agnesSize,
+      };
+
+      // Agnes AI 使用 extra_body.image 传递参考图
+      if (hasAgnesReferences) {
+        requestBody.extra_body = {
+          image: effectiveReferenceImages,
+          response_format: 'b64_json',
+        };
+      } else {
+        requestBody.return_base64 = true;
+      }
+
+      const response = await retryOperation(async () => {
+        const res = await fetch(`${apiBase}${imageModelEndpoint}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'Accept': '*/*',
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!res.ok) {
+          const parsedError = await parseHttpError(res);
+          const parsedAny: any = parsedError;
+          const status = parsedAny.status || res.status;
+          throw buildImageApiError(status, parsedError.message);
+        }
+
+        return await res.json();
+      });
+
+      console.log('[Agnes] Raw response:', JSON.stringify(response, null, 2));
+      const agnesImage = extractImageFromOpenAiResponse(response);
+      console.log('[Agnes] Extracted image:', agnesImage?.substring(0, 150));
+
+      if (agnesImage) {
+        addRenderLogWithTokens({
+          type: 'keyframe',
+          resourceId: 'image-' + Date.now(),
+          resourceName: prompt.substring(0, 50) + '...',
+          status: 'success',
+          model: imageModelId,
+          prompt: prompt,
+          duration: Date.now() - startTime,
+        });
+        return agnesImage;
+      }
+
+      throw new Error('图片生成失败：Agnes AI 未返回有效图片数据。');
     }
 
     // Gemini generateContent protocol

@@ -22,7 +22,7 @@ const retryOperation = async <T>(
   delay: number = 2000
 ): Promise<T> => {
   let lastError: Error | null = null;
-  
+
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await operation();
@@ -33,8 +33,8 @@ const retryOperation = async <T>(
       if (status === 400 ||
           status === 401 ||
           status === 403 ||
-          error.message?.includes('400') || 
-          error.message?.includes('401') || 
+          error.message?.includes('400') ||
+          error.message?.includes('401') ||
           error.message?.includes('403')) {
         throw error;
       }
@@ -43,7 +43,7 @@ const retryOperation = async <T>(
       }
     }
   }
-  
+
   throw lastError;
 };
 
@@ -148,42 +148,42 @@ export const callImageApi = async (
   if (!apiKey) {
     throw new ApiKeyError('API Key 缺失，请在设置中配置 API Key');
   }
-  
+
   const apiBase = getApiBaseUrlForModel(activeModel.id);
   const apiModel = activeModel.apiModel || activeModel.id;
   const apiFormat = getImageApiFormat(activeModel);
   const endpointTemplate = activeModel.endpoint || getDefaultImageEndpoint(apiFormat, apiModel);
   const endpoint = endpointTemplate.replace('{model}', apiModel);
-  
+
   // 确定宽高比
   const aspectRatio = options.aspectRatio || activeModel.params.defaultAspectRatio;
-  
+
   // 构建提示词
   let finalPrompt = options.prompt;
-  
+
   // 如果有参考图，添加一致性指令
   if (options.referenceImages && options.referenceImages.length > 0) {
     finalPrompt = `
       ⚠️⚠️⚠️ CRITICAL REQUIREMENTS - CHARACTER CONSISTENCY ⚠️⚠️⚠️
-      
+
       Reference Images Information:
       - The FIRST image is the Scene/Environment reference.
       - Any subsequent images are Character references (Base Look or Variation).
-      
+
       Task:
       Generate a cinematic shot matching this prompt: "${options.prompt}".
-      
+
       ⚠️ ABSOLUTE REQUIREMENTS (NON-NEGOTIABLE):
       1. Scene Consistency:
          - STRICTLY maintain the visual style, lighting, and environment from the scene reference.
-      
+
       2. Character Consistency - HIGHEST PRIORITY:
          If characters are present in the prompt, they MUST be IDENTICAL to the character reference images:
          • Facial Features: Eyes (color, shape, size), nose structure, mouth shape, facial contours must be EXACTLY the same
          • Hairstyle & Hair Color: Length, color, texture, and style must be PERFECTLY matched
          • Clothing & Outfit: Style, color, material, and accessories must be IDENTICAL
          • Body Type: Height, build, proportions must remain consistent
-         
+
       ⚠️ DO NOT create variations or interpretations of the character - STRICT REPLICATION ONLY!
       ⚠️ Character appearance consistency is THE MOST IMPORTANT requirement!
     `;
@@ -270,6 +270,54 @@ export const callImageApi = async (
     throw new Error('图片生成失败：OpenAI Images 未返回有效图片数据。');
   }
 
+  // Agnes AI protocol (extra_body.image)
+  if (apiFormat === 'agnes') {
+    const hasAgnesReferences = Boolean(options.referenceImages?.length);
+    const agnesSize = mapAspectRatioToOpenAiImageSize(aspectRatio);
+
+    const requestBody: any = {
+      model: apiModel,
+      prompt: finalPrompt,
+      size: agnesSize,
+    };
+
+    // Agnes AI 使用 extra_body.image 传递参考图
+    if (hasAgnesReferences) {
+      requestBody.extra_body = {
+        image: options.referenceImages,
+        response_format: 'b64_json',
+      };
+    } else {
+      requestBody.return_base64 = true;
+    }
+
+    const response = await retryOperation(async () => {
+      const res = await fetch(`${apiBase}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'Accept': '*/*',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!res.ok) {
+        const backendMessage = await parseHttpErrorBody(res);
+        throw buildImageApiError(res.status, backendMessage);
+      }
+
+      return await res.json();
+    });
+
+    const agnesImage = extractImageFromOpenAiResponse(response);
+    if (agnesImage) {
+      return agnesImage;
+    }
+
+    throw new Error('图片生成失败：Agnes AI 未返回有效图片数据。');
+  }
+
   // Gemini generateContent protocol
   const parts: any[] = [{ text: finalPrompt }];
   if (options.referenceImages) {
@@ -350,6 +398,6 @@ export const isAspectRatioSupported = (
 ): boolean => {
   const activeModel = model || getActiveImageModel();
   if (!activeModel) return false;
-  
+
   return activeModel.params.supportedAspectRatios.includes(aspectRatio);
 };

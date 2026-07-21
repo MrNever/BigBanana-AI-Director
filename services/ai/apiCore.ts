@@ -788,6 +788,7 @@ export const convertVideoUrlToBase64 = async (url: string): Promise<string> => {
 /**
  * Resize base64 PNG image to target size with cover strategy.
  * Return raw base64 (without data URI prefix).
+ * Supports: pure base64, data URL, or HTTP(S) URL
  */
 export const resizeImageToSize = async (base64Data: string, targetWidth: number, targetHeight: number): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -818,8 +819,39 @@ export const resizeImageToSize = async (base64Data: string, targetWidth: number,
       resolve(result);
     };
 
-    img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = `data:image/png;base64,${base64Data}`;
+    img.onerror = (error) => {
+      console.error('[resizeImageToSize] Failed to load image:', base64Data.substring(0, 100), error);
+      reject(new Error('Failed to load image'));
+    };
+
+    // 智能处理不同格式的输入
+    if (/^https?:\/\//i.test(base64Data)) {
+      // HTTP(S) URL - 通过媒体代理获取以避免 CORS
+      console.log('[resizeImageToSize] Fetching URL via proxy:', base64Data.substring(0, 100));
+      fetchMediaWithCorsFallback(base64Data)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.blob();
+        })
+        .then(blob => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            img.src = reader.result as string;
+          };
+          reader.onerror = () => reject(new Error('Failed to read blob'));
+          reader.readAsDataURL(blob);
+        })
+        .catch(err => {
+          console.error('[resizeImageToSize] Fetch failed:', err);
+          reject(new Error(`Failed to fetch image: ${err.message}`));
+        });
+    } else if (/^data:image/.test(base64Data)) {
+      // 完整的 data URL - 直接使用
+      img.src = base64Data;
+    } else {
+      // 纯 base64 字符串 - 添加前缀
+      img.src = `data:image/png;base64,${base64Data}`;
+    }
   });
 };
 
