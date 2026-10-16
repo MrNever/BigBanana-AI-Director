@@ -2,7 +2,7 @@ import React from 'react';
 import { Play, Download, FileVideo, Loader2 } from 'lucide-react';
 import { DownloadState } from './constants';
 import { useAlert } from '../GlobalAlert';
-import { MasterExportMode, MasterVideoQuality } from '../../services/exportService';
+import { MasterExportMode, MasterVideoQuality, MasterVideoOutputFormat } from '../../services/exportService';
 
 interface Props {
   completedShotsCount: number;
@@ -11,8 +11,10 @@ interface Props {
   downloadState: DownloadState;
   exportMode: MasterExportMode;
   exportQuality: MasterVideoQuality;
+  outputFormat: MasterVideoOutputFormat;
   onExportModeChange: (mode: MasterExportMode) => void;
   onExportQualityChange: (quality: MasterVideoQuality) => void;
+  onOutputFormatChange: (format: MasterVideoOutputFormat) => void;
   onPreview: () => void;
   onDownloadMaster: () => void;
 }
@@ -24,8 +26,10 @@ const ActionButtons: React.FC<Props> = ({
   downloadState,
   exportMode,
   exportQuality,
+  outputFormat,
   onExportModeChange,
   onExportQualityChange,
+  onOutputFormatChange,
   onPreview,
   onDownloadMaster
 }) => {
@@ -35,7 +39,8 @@ const ActionButtons: React.FC<Props> = ({
   const canDownloadSegments = completedShotsCount > 0;
   const canDownloadByMode = exportMode === 'segments-zip' ? canDownloadSegments : canDownloadMaster;
 
-  const modeLabel = exportMode === 'segments-zip' ? '下载分镜片段 ZIP' : '下载母版视频（WEBM）';
+  const formatLabel = outputFormat === 'mp4' ? 'MP4' : 'WEBM';
+  const modeLabel = exportMode === 'segments-zip' ? '下载分镜片段 ZIP' : `下载母版视频（${formatLabel}）`;
   const cardBase = 'min-h-[156px] rounded-xl border border-[var(--border-primary)] bg-[var(--bg-surface)] p-4 flex flex-col justify-between shadow-sm';
   const titleClass = 'text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider';
   const descClass = 'text-[10px] leading-relaxed text-[var(--text-tertiary)]';
@@ -92,10 +97,24 @@ const ActionButtons: React.FC<Props> = ({
               <div className="h-8 rounded border border-transparent bg-transparent" aria-hidden="true" />
             )}
           </div>
+          {exportMode === 'master-video' && (
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={outputFormat}
+                onChange={(event) => onOutputFormatChange(event.target.value as MasterVideoOutputFormat)}
+                disabled={isDownloading}
+                className="h-8 bg-[var(--bg-elevated)] border border-[var(--border-primary)] text-[var(--text-secondary)] rounded px-2 text-[11px] focus:outline-none"
+              >
+                <option value="webm">WebM 格式</option>
+                <option value="mp4">MP4 格式</option>
+              </select>
+              <div className="h-8 rounded border border-transparent bg-transparent" aria-hidden="true" />
+            </div>
+          )}
           <p className={descClass}>
             {exportMode === 'segments-zip'
               ? '分镜ZIP适合自己在剪辑软件二次创作。'
-              : '母版拼接适合快速交付，质量档位会影响文件体积。'}
+              : `母版拼接适合快速交付，质量档位会影响文件体积。${outputFormat === 'mp4' ? 'MP4格式兼容性更好。' : 'WebM体积更小。'}`}
           </p>
         </div>
         <button

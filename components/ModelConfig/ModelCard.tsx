@@ -167,6 +167,17 @@ const ModelCard: React.FC<ModelCardProps> = ({
               : '异步（Sora 类）'
         }
       </div>
+      {(editParams.maxReferenceImages || editParams.fixedSize || editParams.maxReferenceAudios) && (
+        <div className="text-[10px] text-[var(--text-muted)] space-y-0.5">
+          {editParams.fixedSize && <div>固定分辨率：{editParams.fixedSize}</div>}
+          {typeof editParams.maxReferenceImages === 'number' && (
+            <div>参考图上限：{editParams.maxReferenceImages} 张（超出自动截断）</div>
+          )}
+          {typeof editParams.maxReferenceAudios === 'number' && (
+            <div>参考音频上限：{editParams.maxReferenceAudios} 段</div>
+          )}
+        </div>
+      )}
     </div>
   );
 

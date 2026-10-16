@@ -23,18 +23,126 @@ const SORA_COMPATIBLE_VIDEO_MODELS = new Set([
   'sora-2',
   'doubao-seedance-1-5-pro',
 ]);
-const AGNES_VIDEO_MODELS = new Set([
-  'agnes-video-v2.0',
-]);
+const AGNES_DEFAULT_MAX_REFERENCE_IMAGES = 5;
+const AGNES_DEFAULT_MAX_REFERENCE_AUDIOS = 3;
+const AGNES_FLASH_FIXED_SIZE = '720P';
 
 const isSoraCompatibleVideoModel = (modelName: string): boolean =>
   SORA_COMPATIBLE_VIDEO_MODELS.has((modelName || '').trim().toLowerCase());
 
 const isAgnesVideoModel = (modelName: string): boolean =>
-  AGNES_VIDEO_MODELS.has((modelName || '').trim().toLowerCase());
+  (modelName || '').trim().toLowerCase().startsWith('agnes-video');
+
+const isAgnesFlashVideoModel = (modelName: string): boolean =>
+  (modelName || '').trim().toLowerCase().includes('agnes-video') &&
+  (modelName || '').trim().toLowerCase().includes('flash');
 
 const toFriendlyVideoErrorMessage = (message: string): string =>
   toFriendlyModerationMessage(message) || message;
+
+/**
+ * Agnes reference 模式参考图截断：刊例价免费额 / Flash 硬上限均为 5 张。
+ * 保留顺序靠前的图（调用方应按优先级排列：关键帧 > 场景 > 角色 > 道具）。
+ */
+export const limitAgnesReferenceImages = (
+  images: string[],
+  maxImages: number = AGNES_DEFAULT_MAX_REFERENCE_IMAGES
+): { images: string[]; droppedCount: number; maxImages: number } => {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const img of images || []) {
+    const normalized = String(img || '').trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(normalized);
+  }
+  const limited = deduped.slice(0, Math.max(0, maxImages));
+  return {
+    images: limited,
+    droppedCount: Math.max(0, deduped.length - limited.length),
+    maxImages,
+  };
+};
+
+const clampAgnesSeconds = (duration: VideoDuration): string => {
+  const n = Number(duration);
+  if (!Number.isFinite(n)) return '5';
+  return String(Math.min(12, Math.max(4, Math.round(n))));
+};
+
+const resolveAgnesAspectRatio = (aspectRatio: AspectRatio): string => {
+  if (aspectRatio === '9:16' || aspectRatio === '1:1' || aspectRatio === '16:9') {
+    return aspectRatio;
+  }
+  return '16:9';
+};
+
+const buildAgnesVideoRequestBody = (
+  modelName: string,
+  prompt: string,
+  references: string[],
+  aspectRatio: AspectRatio,
+  duration: VideoDuration,
+  options?: {
+    maxReferenceImages?: number;
+    fixedSize?: string;
+    extraReferenceImages?: string[];
+  }
+): { body: Record<string, unknown>; droppedReferenceCount: number } => {
+  const maxImages = options?.maxReferenceImages ?? AGNES_DEFAULT_MAX_REFERENCE_IMAGES;
+  const size = options?.fixedSize || AGNES_FLASH_FIXED_SIZE;
+  const seconds = clampAgnesSeconds(duration);
+  const aspect_ratio = resolveAgnesAspectRatio(aspectRatio);
+  const startFrame = references[0];
+  const endFrame = references[1];
+
+  // 有首/尾帧时优先 keyframe（不走 images[]，避免 reference 5 张硬上限误伤）
+  if (startFrame || endFrame) {
+    const body: Record<string, unknown> = {
+      model: modelName,
+      prompt,
+      mode: 'keyframe',
+      seconds,
+      size,
+      aspect_ratio,
+      n: 1,
+    };
+    if (startFrame) body.first_frame = startFrame;
+    if (endFrame) body.last_frame = endFrame;
+    return { body, droppedReferenceCount: 0 };
+  }
+
+  // 无关键帧时：纯文生，或把额外资产参考图走 reference 模式（硬截断到上限）
+  const limited = limitAgnesReferenceImages(options?.extraReferenceImages || [], maxImages);
+  if (limited.images.length > 0) {
+    return {
+      body: {
+        model: modelName,
+        prompt,
+        mode: 'reference',
+        seconds,
+        size,
+        aspect_ratio,
+        n: 1,
+        images: limited.images,
+      },
+      droppedReferenceCount: limited.droppedCount,
+    };
+  }
+
+  return {
+    body: {
+      model: modelName,
+      prompt,
+      mode: 'text',
+      seconds,
+      size,
+      aspect_ratio,
+      n: 1,
+    },
+    droppedReferenceCount: 0,
+  };
+};
 
 const mapVolcengineRatio = (
   aspectRatio: AspectRatio,
@@ -104,27 +212,40 @@ const generateVideoAsync = async (
   let createResponse: Response;
 
   if (isAgnes) {
-    // Agnes AI 使用 JSON 格式
-    console.log('🎬 使用 Agnes AI JSON 格式创建任务...');
-
-    const requestBody: any = {
-      model: resolvedModelName,
-      prompt: prompt,
-      width: VIDEO_WIDTH,
-      height: VIDEO_HEIGHT,
-      num_frames: Math.min(Math.floor((duration * 24 - 1) / 8) * 8 + 1, 441), // 遵循 8n+1 规则
-      frame_rate: 24,
+    // Agnes Video 2.5 / Flash：OpenAI Videos 兼容 JSON（text / keyframe / reference）
+    // Flash 强制 720P；reference.images 最多 5 张（刊例价免费图额同为 5）
+    const modelParams = (resolveModel('video', resolvedModelName)?.params || {}) as {
+      maxReferenceImages?: number;
+      fixedSize?: string;
     };
+    const { body: requestBody, droppedReferenceCount } = buildAgnesVideoRequestBody(
+      resolvedModelName,
+      prompt,
+      references,
+      aspectRatio,
+      duration,
+      {
+        maxReferenceImages: modelParams.maxReferenceImages ?? AGNES_DEFAULT_MAX_REFERENCE_IMAGES,
+        fixedSize:
+          modelParams.fixedSize ||
+          (isAgnesFlashVideoModel(resolvedModelName) ? AGNES_FLASH_FIXED_SIZE : AGNES_FLASH_FIXED_SIZE),
+      }
+    );
 
-    // Agnes AI: 单图用 image，多图用 extra_body.image + mode: keyframes
-    if (references.length >= 2) {
-      requestBody.extra_body = {
-        image: references,
-        mode: 'keyframes',
-      };
-    } else if (references.length === 1) {
-      requestBody.image = references[0];
+    if (droppedReferenceCount > 0) {
+      console.warn(
+        `⚠️ Agnes 参考图超过上限 ${modelParams.maxReferenceImages ?? AGNES_DEFAULT_MAX_REFERENCE_IMAGES}，已截断 ${droppedReferenceCount} 张`
+      );
     }
+
+    console.log('🎬 使用 Agnes AI 创建任务:', {
+      model: resolvedModelName,
+      mode: requestBody.mode,
+      size: requestBody.size,
+      aspect_ratio: requestBody.aspect_ratio,
+      seconds: requestBody.seconds,
+      imageCount: Array.isArray(requestBody.images) ? requestBody.images.length : (requestBody.first_frame ? (requestBody.last_frame ? 2 : 1) : 0),
+    });
 
     createResponse = await fetch(`${apiBase}/v1/videos`, {
       method: 'POST',
@@ -178,19 +299,39 @@ const generateVideoAsync = async (
   }
 
   if (!createResponse.ok) {
-    if (createResponse.status === 400) {
+    let errorMessage = `创建任务失败: HTTP ${createResponse.status}`;
+    let errorDetail = '';
+    try {
+      const errorData = await createResponse.json();
+      errorDetail = String(errorData.detail || errorData.error?.message || errorData.message || '');
+      errorMessage = errorDetail || errorMessage;
+    } catch (e) {
+      const errorText = await createResponse.text();
+      if (errorText) errorMessage = errorText;
+    }
+
+    if (isAgnes && /images length must not exceed/i.test(errorDetail || errorMessage)) {
+      throw new Error(
+        `参考图超过 Agnes 上限（最多 ${AGNES_DEFAULT_MAX_REFERENCE_IMAGES} 张）。请减少参考图后重试；系统会优先保留关键帧。`
+      );
+    }
+    if (isAgnes && /size must be 720P/i.test(errorDetail || errorMessage)) {
+      throw new Error('Agnes Video Flash 仅支持 720P，请勿指定其他分辨率。');
+    }
+    if (isAgnes && /audios length must not exceed/i.test(errorDetail || errorMessage)) {
+      throw new Error(
+        `参考音频超过 Agnes 上限（最多 ${AGNES_DEFAULT_MAX_REFERENCE_AUDIOS} 段）。请减少音频后重试。`
+      );
+    }
+    if (isAgnes && /videos is not supported/i.test(errorDetail || errorMessage)) {
+      throw new Error('Agnes Video Flash 不支持参考视频输入，请仅使用图片或音频参考。');
+    }
+
+    if (createResponse.status === 400 && !isAgnes) {
       throw new Error('提示词可能包含不安全或违规内容，未能处理。请修改后重试。');
     }
     if (createResponse.status === 500) {
       throw new Error('当前请求较多，暂时未能处理成功，请稍后重试。');
-    }
-    let errorMessage = `创建任务失败: HTTP ${createResponse.status}`;
-    try {
-      const errorData = await createResponse.json();
-      errorMessage = errorData.error?.message || errorMessage;
-    } catch (e) {
-      const errorText = await createResponse.text();
-      if (errorText) errorMessage = errorText;
     }
     throw new Error(toFriendlyVideoErrorMessage(errorMessage));
   }
@@ -199,11 +340,11 @@ const generateVideoAsync = async (
   const taskId = createData.id || createData.task_id;
   const videoId = createData.video_id; // Agnes AI 返回 video_id
 
-  if (!taskId) {
+  if (!taskId && !(isAgnes && videoId)) {
     throw new Error('创建视频任务失败：未返回任务ID');
   }
 
-  console.log(`📋 ${resolvedModelName} 任务已创建，任务ID:`, taskId);
+  console.log(`📋 ${resolvedModelName} 任务已创建，任务ID:`, taskId || videoId);
   if (videoId) {
     console.log(`📹 视频ID:`, videoId);
   }
@@ -243,12 +384,12 @@ const generateVideoAsync = async (
     console.log(`🔄 ${resolvedModelName} 任务状态:`, status, '进度:', statusData.progress);
 
     if (status === 'completed' || status === 'succeeded') {
-      // Agnes AI: 视频URL在 metadata.url
-      if (isAgnes && statusData.metadata?.url) {
-        videoUrlFromStatus = statusData.metadata.url;
+      // Agnes：优先顶层 url，兼容旧字段 metadata.url
+      if (isAgnes && (statusData.url || statusData.metadata?.url)) {
+        videoUrlFromStatus = statusData.url || statusData.metadata?.url;
         console.log('✅ Agnes AI 任务完成，视频URL:', videoUrlFromStatus);
       } else {
-        videoUrlFromStatus = statusData.video_url || statusData.videoUrl || null;
+        videoUrlFromStatus = statusData.video_url || statusData.videoUrl || statusData.url || null;
       }
 
       if (statusData.id && statusData.id.startsWith('video_')) {

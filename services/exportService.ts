@@ -1,6 +1,8 @@
 import { ProjectState } from '../types';
 import { dataUrlToBlob, isOpfsVideoRef, isVideoDataUrl, resolveVideoToBlob } from './videoStorageService';
 import { fetchMediaWithCorsFallback } from './mediaFetchService';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 type ProgressReporter = (phase: string, progress: number) => void;
 
@@ -11,6 +13,7 @@ interface MasterVideoFormat {
 
 export type MasterExportMode = 'master-video' | 'segments-zip';
 export type MasterVideoQuality = 'economy' | 'balanced' | 'pro';
+export type MasterVideoOutputFormat = 'webm' | 'mp4';
 
 interface MasterQualityPreset {
   fps: number;
@@ -21,6 +24,7 @@ interface MasterQualityPreset {
 export interface MasterExportOptions {
   mode?: MasterExportMode;
   quality?: MasterVideoQuality;
+  outputFormat?: MasterVideoOutputFormat;
 }
 
 const MASTER_QUALITY_PRESETS: Record<MasterVideoQuality, MasterQualityPreset> = {
@@ -68,6 +72,201 @@ const pickMasterVideoFormat = (): MasterVideoFormat | null => {
 const createProjectTitle = (project: ProjectState): string => (
   project.scriptData?.title || project.title || 'master'
 );
+
+// FFmpeg instance (singleton)
+let ffmpegInstance: FFmpeg | null = null;
+let ffmpegLoaded = false;
+
+/**
+ * Initialize FFmpeg.wasm instance
+ */
+const loadFFmpeg = async (onProgress?: ProgressReporter): Promise<FFmpeg> => {
+  if (ffmpegInstance && ffmpegLoaded) {
+    console.log('[FFmpeg] Using cached instance');
+    return ffmpegInstance;
+  }
+
+  console.log('[FFmpeg] Starting to load...');
+  onProgress?.('正在加载 FFmpeg...', 1);
+  
+  const ffmpeg = new FFmpeg();
+  
+  ffmpeg.on('log', ({ message }) => {
+    console.log('[FFmpeg Log]', message);
+  });
+
+  // 多个 CDN 源以提高成功率
+  const cdnSources = [
+    'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd',
+    'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd',
+  ];
+  
+  onProgress?.('下载 FFmpeg 核心文件...', 3);
+  
+  // 添加超时控制
+  const loadWithTimeout = async (promise: Promise<any>, timeoutMs: number, description: string) => {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`${description} 超时 (${timeoutMs/1000}s)`)), timeoutMs)
+      )
+    ]);
+  };
+  
+  // 尝试多个 CDN 源
+  let lastError: Error | null = null;
+  for (let i = 0; i < cdnSources.length; i++) {
+    const baseURL = cdnSources[i];
+    console.log(`[FFmpeg] Trying CDN ${i + 1}/${cdnSources.length}: ${baseURL}`);
+    
+    try {
+      const coreURL = await loadWithTimeout(
+        toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        30000,
+        '下载核心 JS 文件'
+      );
+      console.log('[FFmpeg] Core JS loaded');
+      onProgress?.('下载 WASM 文件 (约 30MB)...', 5);
+      
+      const wasmURL = await loadWithTimeout(
+        toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        60000,
+        '下载 WASM 文件'
+      );
+      console.log('[FFmpeg] WASM loaded, initializing...');
+      onProgress?.('初始化 FFmpeg 引擎...', 7);
+      
+      await loadWithTimeout(
+        ffmpeg.load({
+          coreURL,
+          wasmURL,
+        }),
+        30000,
+        'FFmpeg 初始化'
+      );
+      console.log('[FFmpeg] Load completed successfully');
+      
+      onProgress?.('FFmpeg 就绪', 8);
+      ffmpegInstance = ffmpeg;
+      ffmpegLoaded = true;
+      return ffmpeg;
+      
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('未知错误');
+      console.warn(`[FFmpeg] CDN ${i + 1} failed:`, lastError.message);
+      if (i < cdnSources.length - 1) {
+        onProgress?.(`CDN ${i + 1} 失败，尝试备用源...`, 3);
+      }
+    }
+  }
+  
+  // 所有源都失败
+  console.error('[FFmpeg] All CDN sources failed');
+  const errorMsg = lastError?.message || '未知错误';
+  throw new Error(`FFmpeg 加载失败: ${errorMsg}。建议使用 WebM 格式导出。`);
+};
+
+/**
+ * Convert WebM blob to MP4 using FFmpeg.wasm
+ */
+const convertWebMToMP4 = async (
+  webmBlob: Blob,
+  quality: MasterVideoQuality = 'balanced',
+  onProgress?: ProgressReporter
+): Promise<Blob> => {
+  let ffmpeg: FFmpeg | null = null;
+  
+  try {
+    console.log('[MP4 Conversion] Starting conversion, blob size:', webmBlob.size);
+    ffmpeg = await loadFFmpeg(onProgress);
+    
+    onProgress?.('准备转换视频...', 10);
+    console.log('[MP4 Conversion] Writing input file...');
+    
+    // Write input file
+    const inputName = 'input.webm';
+    const outputName = 'output.mp4';
+    await ffmpeg.writeFile(inputName, await fetchFile(webmBlob));
+    console.log('[MP4 Conversion] Input file written');
+    
+    onProgress?.('开始转换为 MP4...', 15);
+    
+    // Quality presets for MP4 (H.264)
+    const qualityPresets = {
+      economy: { crf: '28', preset: 'fast' },
+      balanced: { crf: '23', preset: 'medium' },
+      pro: { crf: '18', preset: 'slow' },
+    };
+    
+    const preset = qualityPresets[quality] || qualityPresets.balanced;
+    console.log('[MP4 Conversion] Using preset:', quality, preset);
+    
+    // Set up progress tracking - register BEFORE exec
+    let lastProgress = 15;
+    const progressHandler = ({ progress, time }: { progress: number; time: number }) => {
+      // FFmpeg progress is 0-1, map to 15-90 range
+      const currentProgress = 15 + Math.round(progress * 75);
+      if (currentProgress > lastProgress) {
+        lastProgress = currentProgress;
+        const seconds = Math.floor(time / 1000000);
+        console.log('[MP4 Conversion] Progress:', currentProgress, '% Time:', seconds, 's');
+        onProgress?.(`转换为 MP4 (${seconds}s)...`, currentProgress);
+      }
+    };
+    
+    ffmpeg.on('progress', progressHandler);
+    console.log('[MP4 Conversion] Starting FFmpeg exec...');
+    
+    // Convert with H.264 encoding
+    await ffmpeg.exec([
+      '-i', inputName,
+      '-c:v', 'libx264',
+      '-preset', preset.preset,
+      '-crf', preset.crf,
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-movflags', '+faststart',
+      outputName
+    ]);
+    
+    console.log('[MP4 Conversion] FFmpeg exec completed');
+    
+    // Remove progress handler
+    ffmpeg.off('progress', progressHandler);
+    
+    onProgress?.('读取转换后的文件...', 92);
+    console.log('[MP4 Conversion] Reading output file...');
+    
+    // Read output file
+    const data = await ffmpeg.readFile(outputName);
+    const mp4Blob = new Blob([data], { type: 'video/mp4' });
+    console.log('[MP4 Conversion] Output file size:', mp4Blob.size);
+    
+    // Clean up
+    try {
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+      console.log('[MP4 Conversion] Temporary files cleaned up');
+    } catch (cleanupError) {
+      console.warn('[MP4 Conversion] Failed to clean up temporary files:', cleanupError);
+    }
+    
+    onProgress?.('转换完成', 100);
+    console.log('[MP4 Conversion] Conversion completed successfully');
+    
+    return mp4Blob;
+  } catch (error) {
+    console.error('[MP4 Conversion] Conversion failed:', error);
+    // Try to clean up on error
+    if (ffmpeg) {
+      try {
+        await ffmpeg.deleteFile('input.webm').catch(() => {});
+        await ffmpeg.deleteFile('output.mp4').catch(() => {});
+      } catch {}
+    }
+    throw new Error(`视频转换失败: ${error instanceof Error ? error.message : '未知错误'}`);
+  }
+};
 
 const inferDubbingExtension = (shot: ProjectState['shots'][number]): 'wav' | 'mp3' => {
   const configured = shot.dubbing?.outputFormat;
@@ -418,6 +617,7 @@ export async function downloadMasterVideo(
   try {
     const mode = options?.mode || 'master-video';
     const quality = options?.quality || 'balanced';
+    const outputFormat = options?.outputFormat || 'webm';
 
     // 1. Collect completed shots that already have video output.
     const completedShots = project.shots.filter(shot => shot.interval?.videoUrl);
@@ -452,18 +652,48 @@ export async function downloadMasterVideo(
 
     try {
       const stitched = await stitchVideoBlobsToMaster(videoBlobs, quality, onProgress);
-      onProgress?.('Building master file...', 95);
+      
+      let finalBlob = stitched.blob;
+      let finalExtension = stitched.extension;
+      
+      // Convert to MP4 if requested
+      if (outputFormat === 'mp4') {
+        try {
+          console.log('[Export] Starting MP4 conversion...');
+          // Create a progress wrapper that maps conversion progress to 92-98 range
+          const conversionProgress = (phase: string, prog: number) => {
+            // Map 0-100 to 92-98
+            const mappedProgress = 92 + Math.round(prog * 0.06);
+            onProgress?.(phase, mappedProgress);
+          };
+          finalBlob = await convertWebMToMP4(stitched.blob, quality, conversionProgress);
+          finalExtension = 'mp4';
+          console.log('[Export] MP4 conversion successful');
+        } catch (conversionError) {
+          console.warn('[Export] MP4 conversion failed:', conversionError);
+          // Show user-friendly error message
+          const errorMsg = conversionError instanceof Error ? conversionError.message : '未知错误';
+          console.error('[Export] Error details:', errorMsg);
+          // Notify user via progress callback
+          onProgress?.(`MP4 转换失败，使用 WebM 格式: ${errorMsg}`, 92);
+          // Wait a bit so user can see the message
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          // Keep the original WebM format
+        }
+      }
+      
+      onProgress?.('准备下载...', 99);
 
-      const url = URL.createObjectURL(stitched.blob);
+      const url = URL.createObjectURL(finalBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${createProjectTitle(project)}_master.${stitched.extension}`;
+      a.download = `${createProjectTitle(project)}_master.${finalExtension}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      onProgress?.('Completed!', 100);
+      onProgress?.('完成！', 100);
     } catch (stitchError) {
       console.warn('Master stitch failed, fallback to segments ZIP export:', stitchError);
       await downloadMasterVideoAsZip(project, completedShots, onProgress);

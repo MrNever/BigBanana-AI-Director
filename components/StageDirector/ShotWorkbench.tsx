@@ -354,24 +354,22 @@ const ShotWorkbench: React.FC<ShotWorkbenchProps> = ({
 
     if (!hasStartFrame) {
       return {
-        label: '下一步：生成首帧',
-        hint: '先生成首帧，建立镜头视觉锚点。',
+        label: '下一步：编辑首帧',
+        hint: '进入关键帧编辑后手动单张生成，避免把已有图片再次丢进队列。',
         disabled: startKf?.status === 'generating',
         onClick: () => {
           openSection('keyframe');
-          onGenerateKeyframe('start');
         },
       };
     }
 
     if (effectiveVideoInputMode === 'keyframes' && showEndFrame && !hasEndFrame) {
       return {
-        label: '下一步：生成尾帧',
-        hint: '补齐首尾关键帧后，再做视频会更稳定。',
+        label: '下一步：编辑尾帧',
+        hint: '进入关键帧编辑后手动单张生成尾帧。',
         disabled: endKf?.status === 'generating',
         onClick: () => {
           openSection('keyframe');
-          onGenerateKeyframe('end');
         },
       };
     }

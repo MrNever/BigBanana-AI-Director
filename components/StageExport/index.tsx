@@ -6,6 +6,7 @@ import {
   downloadSourceAssets,
   MasterExportMode,
   MasterVideoQuality,
+  MasterVideoOutputFormat,
 } from '../../services/exportService';
 import { exportProjectData } from '../../services/storageService';
 import { STYLES } from './constants';
@@ -45,6 +46,7 @@ const StageExport: React.FC<Props> = ({ project }) => {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [exportMode, setExportMode] = useState<MasterExportMode>('master-video');
   const [exportQuality, setExportQuality] = useState<MasterVideoQuality>('balanced');
+  const [outputFormat, setOutputFormat] = useState<MasterVideoOutputFormat>('webm');
 
   // Source Assets Download state
   const [isDownloadingAssets, setIsDownloadingAssets] = useState(false);
@@ -136,6 +138,7 @@ const StageExport: React.FC<Props> = ({ project }) => {
       }, {
         mode: exportMode,
         quality: exportQuality,
+        outputFormat: outputFormat,
       });
       
       setTimeout(() => {
@@ -242,8 +245,10 @@ const StageExport: React.FC<Props> = ({ project }) => {
               }}
               exportMode={exportMode}
               exportQuality={exportQuality}
+              outputFormat={outputFormat}
               onExportModeChange={setExportMode}
               onExportQualityChange={setExportQuality}
+              onOutputFormatChange={setOutputFormat}
               onPreview={openVideoPlayer}
               onDownloadMaster={handleDownloadMaster}
             />

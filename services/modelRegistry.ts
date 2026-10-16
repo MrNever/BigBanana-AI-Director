@@ -67,7 +67,20 @@ export const loadRegistry = (): ModelRegistryState => {
         'veo_3_1_t2v_fast_portrait',
         'veo_3_1_i2v_s_fast_fl_landscape',
         'veo_3_1_i2v_s_fast_fl_portrait',
+        'agnes-video-v2.0',
       ];
+      const deprecatedAgnesModelIds = [
+        'agnes-2.0-flash',
+        'agnes-1.5-flash',
+        'agnes-image-2.0-flash',
+        'agnes-video-v2.0',
+      ];
+      const agnesModelMigrations: Record<string, string> = {
+        'agnes-2.0-flash': 'agnes-3.0-flash',
+        'agnes-1.5-flash': 'agnes-2.5-flash',
+        'agnes-image-2.0-flash': 'agnes-image-2.5-flash',
+        'agnes-video-v2.0': 'agnes-video-2.5',
+      };
 
       // 兼容旧版本：activeModels 可能缺少 audio 字段
       parsed.activeModels = {
@@ -106,11 +119,33 @@ export const loadRegistry = (): ModelRegistryState => {
       const builtInProviderIds = BUILTIN_PROVIDERS.map(p => p.id);
       const builtInModelIds = ALL_BUILTIN_MODELS.map(m => m.id);
       
-      // 合并内置提供商
-      const existingProviderIds = parsed.providers.map(p => p.id);
+      // 合并内置提供商，并同步代码中的 baseUrl / 内置 apiKey
+      let providersSynced = false;
       BUILTIN_PROVIDERS.forEach(bp => {
-        if (!existingProviderIds.includes(bp.id)) {
+        const existingIndex = parsed.providers.findIndex(p => p.id === bp.id);
+        if (existingIndex === -1) {
           parsed.providers.unshift(bp);
+          providersSynced = true;
+          return;
+        }
+
+        const existing = parsed.providers[existingIndex];
+        const nextBaseUrl = bp.baseUrl;
+        const nextName = bp.name;
+        const nextApiKey = bp.apiKey;
+        const baseUrlChanged = normalizeBaseUrl(existing.baseUrl) !== normalizeBaseUrl(nextBaseUrl);
+        const nameChanged = existing.name !== nextName;
+        const apiKeyChanged = Boolean(nextApiKey) && existing.apiKey !== nextApiKey;
+
+        if (baseUrlChanged || nameChanged || apiKeyChanged) {
+          parsed.providers[existingIndex] = {
+            ...existing,
+            name: nextName,
+            baseUrl: nextBaseUrl,
+            ...(nextApiKey ? { apiKey: nextApiKey } : {}),
+            isBuiltIn: true,
+          };
+          providersSynced = true;
         }
       });
 
@@ -187,10 +222,23 @@ export const loadRegistry = (): ModelRegistryState => {
         return { ...m, apiModel: m.id };
       });
 
-      // 清理旧的已废弃视频模型
+      // 迁移已废弃的 Agnes 激活模型到新版本
+      let activeModelMigrated = false;
+      (['chat', 'image', 'video'] as ModelType[]).forEach((type) => {
+        const activeId = parsed.activeModels[type];
+        const migratedId = agnesModelMigrations[activeId];
+        if (migratedId) {
+          parsed.activeModels[type] = migratedId;
+          activeModelMigrated = true;
+        }
+      });
+
+      // 清理旧的已废弃视频模型 / Agnes 旧模型
       const modelCountBefore = parsed.models.length;
       parsed.models = parsed.models.filter(
-        m => !(m.type === 'video' && deprecatedVideoModelIds.includes(m.id))
+        m =>
+          !(m.type === 'video' && deprecatedVideoModelIds.includes(m.id)) &&
+          !(m.isBuiltIn && deprecatedAgnesModelIds.includes(m.id))
       );
       // Clean legacy AntSK built-in alias model entries:
       // doubao-seedance-1-5-pro-251215 on /v1/videos should be replaced by
@@ -215,7 +263,6 @@ export const loadRegistry = (): ModelRegistryState => {
       const modelsRemoved = modelCountBefore - parsed.models.length;
 
       // 迁移激活视频模型
-      let activeModelMigrated = false;
       if (
         deprecatedVideoModelIds.includes(parsed.activeModels.video) ||
         parsed.activeModels.video === 'veo_3_1' ||
@@ -251,7 +298,7 @@ export const loadRegistry = (): ModelRegistryState => {
       registryState = parsed;
 
       // 如果发生了迁移，立即回写 localStorage，避免每次加载都重复执行
-      if (modelsRemoved > 0 || activeModelMigrated || modelsReordered || chatModelAliasMigrated) {
+      if (modelsRemoved > 0 || activeModelMigrated || modelsReordered || chatModelAliasMigrated || providersSynced) {
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
           console.log(`🔄 模型注册中心迁移完成：清理 ${modelsRemoved} 个废弃模型`);

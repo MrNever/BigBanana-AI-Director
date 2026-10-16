@@ -49,7 +49,7 @@ const dedupeImageRefs = (images: string[]): string[] => {
   return output;
 };
 
-export type VideoModelFamily = 'sora' | 'doubao-task' | 'veo-fast' | 'unknown';
+export type VideoModelFamily = 'sora' | 'doubao-task' | 'veo-fast' | 'agnes' | 'unknown';
 
 export interface VideoModelRouting {
   family: VideoModelFamily;
@@ -57,6 +57,8 @@ export interface VideoModelRouting {
   supportsStartFrame: boolean;
   supportsEndFrame: boolean;
   prefersNineGridStoryboard: boolean;
+  /** Agnes reference 模式参考图上限（Flash=5） */
+  maxReferenceImages?: number;
 }
 
 export interface VideoPromptContext {
@@ -126,6 +128,18 @@ export const resolveVideoModelRouting = (videoModel: string): VideoModelRouting 
       supportsStartFrame: true,
       supportsEndFrame: true,
       prefersNineGridStoryboard: true,
+    };
+  }
+
+  if (id.startsWith('agnes-video')) {
+    return {
+      family: 'agnes',
+      normalizedModelId,
+      supportsStartFrame: true,
+      // Agnes keyframe 模式支持 first_frame + last_frame
+      supportsEndFrame: true,
+      prefersNineGridStoryboard: false,
+      maxReferenceImages: 5,
     };
   }
 

@@ -87,9 +87,20 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                 onClick={() => onImageClick(keyframe.imageUrl!, `${label} - 关键帧`)}
                 alt={label}
               />
-              <div className="absolute inset-0 bg-[var(--bg-base)]/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                <span className="text-[var(--text-primary)] text-xs font-mono">点击预览</span>
-              </div>
+              {isGenerating ? (
+                <div className="absolute inset-0 bg-[var(--bg-base)]/70 flex flex-col items-center justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin mb-2 text-[var(--accent)]" />
+                  <span className="text-[10px] text-[var(--text-tertiary)]">重新生成中...</span>
+                </div>
+              ) : hasFailed ? (
+                <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-[var(--error-bg)] text-[var(--error-text)] border border-[var(--error-border)]">
+                  上次失败，可重试
+                </div>
+              ) : (
+                <div className="absolute inset-0 bg-[var(--bg-base)]/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                  <span className="text-[var(--text-primary)] text-xs font-mono">点击预览</span>
+                </div>
+              )}
             </>
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--text-muted)] p-2">
@@ -124,7 +135,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                 disabled={isGenerating}
                 className="flex-1 py-1.5 bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] rounded text-[10px] font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
               >
-                {keyframe?.imageUrl ? '重新生成' : '生成'}
+                {keyframe?.imageUrl ? (hasFailed ? '重试生成' : '重新生成') : '生成'}
               </button>
               <button
                 onClick={() => onUploadKeyframe(type)}

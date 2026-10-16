@@ -77,6 +77,7 @@ export {
 // 视频生成服务
 export {
   generateVideo,
+  limitAgnesReferenceImages,
 } from './videoService';
 
 // 配音生成服务

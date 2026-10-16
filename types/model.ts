@@ -73,6 +73,12 @@ export interface VideoModelParams {
   supportedAspectRatios: AspectRatio[];
   defaultDuration: VideoDuration;
   supportedDurations: VideoDuration[];
+  /** 参考图上限（如 Agnes Flash reference 模式最多 5 张） */
+  maxReferenceImages?: number;
+  /** 参考音频上限（如 Agnes Flash 最多 3 段） */
+  maxReferenceAudios?: number;
+  /** 固定输出分辨率档位（如 Agnes Flash 仅支持 720P） */
+  fixedSize?: '720P' | '960P' | '2K';
 }
 
 /**
@@ -327,6 +333,21 @@ export const DEFAULT_VIDEO_PARAMS_DOUBAO_SEEDANCE_2_0: VideoModelParams = {
 };
 
 /**
+ * Agnes Video 2.5 / 2.5 Flash 默认参数
+ * Flash：仅 720P；reference 模式最多 5 张图、3 段音频（刊例价免费图额也为 5）
+ */
+export const DEFAULT_VIDEO_PARAMS_AGNES: VideoModelParams = {
+  mode: 'async',
+  defaultAspectRatio: '16:9',
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  defaultDuration: 8,
+  supportedDurations: [4, 8, 12],
+  maxReferenceImages: 5,
+  maxReferenceAudios: 3,
+  fixedSize: '720P',
+};
+
+/**
  * 默认配音模型参数
  */
 export const DEFAULT_AUDIO_PARAMS: AudioModelParams = {
@@ -414,25 +435,73 @@ export const BUILTIN_CHAT_MODELS: ChatModelDefinition[] = [
     params: { ...DEFAULT_CHAT_PARAMS },
   },
   {
-    id: 'agnes-2.0-flash',
-    apiModel: 'agnes-2.0-flash',
-    name: 'Agnes 2.0 Flash',
+    id: 'agnes-3.0-pro',
+    apiModel: 'agnes-3.0-pro',
+    name: 'Agnes 3.0 Pro',
     type: 'chat',
     providerId: 'agnes-ai',
     endpoint: '/v1/chat/completions',
-    description: 'Agnes AI 高性能对话模型：快速响应，适合日常对话与内容生成',
+    description: 'Agnes AI 旗舰对话模型：强推理与高质量输出，适合复杂创作与深度分析',
     isBuiltIn: true,
     isEnabled: true,
     params: { ...DEFAULT_CHAT_PARAMS },
   },
   {
-    id: 'agnes-1.5-flash',
-    apiModel: 'agnes-1.5-flash',
-    name: 'Agnes 1.5 Flash',
+    id: 'agnes-3.0-flash',
+    apiModel: 'agnes-3.0-flash',
+    name: 'Agnes 3.0 Flash',
+    type: 'chat',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/chat/completions',
+    description: 'Agnes AI 新一代高速对话模型：快速响应，适合日常对话与内容生成',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_CHAT_PARAMS },
+  },
+  {
+    id: 'agnes-2.5-pro',
+    apiModel: 'agnes-2.5-pro',
+    name: 'Agnes 2.5 Pro',
+    type: 'chat',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/chat/completions',
+    description: 'Agnes AI 高性能对话模型：均衡质量与速度，适合创作与分析任务',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_CHAT_PARAMS },
+  },
+  {
+    id: 'agnes-2.5-flash',
+    apiModel: 'agnes-2.5-flash',
+    name: 'Agnes 2.5 Flash',
     type: 'chat',
     providerId: 'agnes-ai',
     endpoint: '/v1/chat/completions',
     description: 'Agnes AI 轻量对话模型：快速且经济，适合批量处理与高频调用',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_CHAT_PARAMS },
+  },
+  {
+    id: 'agnes-2.5-pro-beta',
+    apiModel: 'agnes-2.5-pro-beta',
+    name: 'Agnes 2.5 Pro Beta',
+    type: 'chat',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/chat/completions',
+    description: 'Agnes AI 2.5 Pro 测试版：尝鲜能力更新，稳定性可能低于正式版',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_CHAT_PARAMS },
+  },
+  {
+    id: 'agnes-2.5-pro-alpha',
+    apiModel: 'agnes-2.5-pro-alpha',
+    name: 'Agnes 2.5 Pro Alpha',
+    type: 'chat',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/chat/completions',
+    description: 'Agnes AI 2.5 Pro 早期预览版：实验特性优先，适合尝鲜体验',
     isBuiltIn: true,
     isEnabled: true,
     params: { ...DEFAULT_CHAT_PARAMS },
@@ -490,9 +559,9 @@ export const BUILTIN_IMAGE_MODELS: ImageModelDefinition[] = [
     params: { ...DEFAULT_IMAGE_PARAMS_OPENAI },
   },
   {
-    id: 'agnes-image-2.1-flash',
-    apiModel: 'agnes-image-2.1-flash',
-    name: 'Agnes Image 2.1 Flash',
+    id: 'agnes-image-2.5-flash',
+    apiModel: 'agnes-image-2.5-flash',
+    name: 'Agnes Image 2.5 Flash',
     type: 'image',
     providerId: 'agnes-ai',
     endpoint: '/v1/images/generations',
@@ -502,9 +571,9 @@ export const BUILTIN_IMAGE_MODELS: ImageModelDefinition[] = [
     params: { ...DEFAULT_IMAGE_PARAMS_AGNES },
   },
   {
-    id: 'agnes-image-2.0-flash',
-    apiModel: 'agnes-image-2.0-flash',
-    name: 'Agnes Image 2.0 Flash',
+    id: 'agnes-image-2.1-flash',
+    apiModel: 'agnes-image-2.1-flash',
+    name: 'Agnes Image 2.1 Flash',
     type: 'image',
     providerId: 'agnes-ai',
     endpoint: '/v1/images/generations',
@@ -578,16 +647,28 @@ export const BUILTIN_VIDEO_MODELS: VideoModelDefinition[] = [
     params: { ...DEFAULT_VIDEO_PARAMS_DOUBAO_SEEDANCE_2_0 },
   },
   {
-    id: 'agnes-video-v2.0',
-    apiModel: 'agnes-video-v2.0',
-    name: 'Agnes Video v2.0',
+    id: 'agnes-video-2.5',
+    apiModel: 'agnes-video-2.5',
+    name: 'Agnes Video 2.5',
     type: 'video',
     providerId: 'agnes-ai',
     endpoint: '/v1/videos',
-    description: 'Agnes AI 视频生成模型：支持文生视频、图生视频、关键帧动画，异步任务模式',
+    description: 'Agnes AI 视频：text / keyframe / reference；reference 最多 5 张参考图，刊例价免费图额 5 张',
     isBuiltIn: true,
     isEnabled: true,
-    params: { ...DEFAULT_VIDEO_PARAMS_SORA },
+    params: { ...DEFAULT_VIDEO_PARAMS_AGNES },
+  },
+  {
+    id: 'agnes-video-2.5-flash',
+    apiModel: 'agnes-video-2.5-flash',
+    name: 'Agnes Video 2.5 Flash',
+    type: 'video',
+    providerId: 'agnes-ai',
+    endpoint: '/v1/videos',
+    description: 'Agnes Flash：仅 720P；reference 最多 5 张图 / 3 段音频；超出将自动截断，避免 400',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_VIDEO_PARAMS_AGNES },
   },
 ];
 
@@ -635,8 +716,8 @@ export const BUILTIN_PROVIDERS: ModelProvider[] = [
   {
     id: 'agnes-ai',
     name: 'Agnes AI Hub',
-    baseUrl: 'https://apihub.agnes-ai.com',
-    apiKey: 'sk-wjXEVQI7Q8M4SMaaLRADScoGb2K7nFpH0Qh0QxqcEIW3TzFs',
+    baseUrl: 'https://api.agnes-ai.cn',
+    apiKey: 'sk-XxfhfoASqJEqMPRd3QppIGrTiZG0U6cIRWKGGKt0XYLuMZ8q',
     isBuiltIn: true,
     isDefault: false,
   },

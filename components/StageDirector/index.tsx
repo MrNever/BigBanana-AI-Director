@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { LayoutGrid, Sparkles, Loader2, AlertCircle, Edit2, Film, MessageSquare, Video as VideoIcon } from 'lucide-react';
 import {
   ProjectState,
@@ -44,7 +44,7 @@ import { useAlert } from '../GlobalAlert';
 import { AspectRatioSelector } from '../AspectRatioSelector';
 import { getUserAspectRatio, setUserAspectRatio, getModelById, getActiveImageModel, getActiveAudioModel } from '../../services/modelRegistry';
 import { persistVideoReference } from '../../services/videoStorageService';
-import { runKeyframePreflight, runVideoPreflight, formatLintIssues } from '../../services/promptLintService';
+import { runKeyframePreflight, runVideoPreflight, formatLintIssues, getActionableLintIssues } from '../../services/promptLintService';
 import { assessShotQuality, getProjectAverageQualityScore } from '../../services/qualityAssessmentService';
 import { assessShotQualityWithLLM } from '../../services/qualityAssessmentV2Service';
 import { updatePromptWithVersion } from '../../services/promptVersionService';
@@ -90,9 +90,17 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError,
     aiInstruction?: string;
   } | null>(null);
 
+  const projectRef = useRef(project);
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
   const activeShotIndex = project.shots.findIndex(s => s.id === activeShotId);
   const activeShot = project.shots[activeShotIndex];
   const projectQualityScore = getProjectAverageQualityScore(project.shots);
+  const missingStartFrameCount = project.shots.filter(
+    (s) => !s.keyframes?.find((k) => k.type === 'start')?.imageUrl
+  ).length;
   const promptTemplates = useMemo(
     () => resolvePromptTemplateConfig(project.promptTemplateOverrides),
     [project.promptTemplateOverrides]
@@ -486,9 +494,9 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError,
       return;
     }
 
-    const nonErrorIssues = preflightResult.issues.filter((issue) => issue.severity !== 'error');
-    if (nonErrorIssues.length > 0) {
-      setToastMessage(`关键帧预检提醒：\n${formatLintIssues(nonErrorIssues)}`);
+    const actionableIssues = getActionableLintIssues(preflightResult.issues);
+    if (actionableIssues.length > 0) {
+      setToastMessage(`关键帧预检提醒：\n${formatLintIssues(actionableIssues)}`);
     }
 
     const promptVersions = updatePromptWithVersion(
@@ -499,10 +507,15 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError,
       `Generate ${type} keyframe`
     );
 
-    // 立即设置生成状态，显示loading
+    // 保留已有图片：重新生成中/失败时不立刻清空，避免已成功出图再次被批量当作缺失入队
+    let previousImageUrl = existingKf?.imageUrl;
+
+    // 立即设置生成状态，显示loading（保留旧图预览）
     updateShot(shot.id, (s) => {
+      const currentKf = s.keyframes?.find((k) => k.type === type);
+      previousImageUrl = currentKf?.imageUrl || previousImageUrl;
       const generatingKeyframe = {
-        ...createKeyframe(kfId, type, prompt, undefined, 'generating'),
+        ...createKeyframe(kfId, type, prompt, previousImageUrl, 'generating'),
         promptVersions,
       };
       return updateKeyframeInShot(s, type, generatingKeyframe);
@@ -532,8 +545,10 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError,
     } catch (e: any) {
       console.error(e);
       updateShot(shot.id, (s) => {
+        const currentKf = s.keyframes?.find((k) => k.type === type);
+        const keepUrl = currentKf?.imageUrl || previousImageUrl;
         const failedKeyframe = {
-          ...createKeyframe(kfId, type, prompt, undefined, 'failed'),
+          ...createKeyframe(kfId, type, prompt, keepUrl, 'failed'),
           promptVersions,
         };
         return updateKeyframeInShot(s, type, failedKeyframe);
@@ -694,9 +709,9 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError,
       return;
     }
 
-    const nonErrorIssues = preflightResult.issues.filter((issue) => issue.severity !== 'error');
-    if (nonErrorIssues.length > 0) {
-      setToastMessage(`视频预检提醒：\n${formatLintIssues(nonErrorIssues)}`);
+    const actionableIssues = getActionableLintIssues(preflightResult.issues);
+    if (actionableIssues.length > 0) {
+      setToastMessage(`视频预检提醒：\n${formatLintIssues(actionableIssues)}`);
     }
     
     const intervalId = shot.interval?.id || generateId(`int-${shot.id}`);
@@ -897,51 +912,51 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError,
   };
 
   /**
-   * 批量生成关键帧
+   * 批量生成缺失的首帧（已有图片的镜头不入队；如需重做请进入镜头手动单张生成）
    */
   const handleBatchGenerateImages = async () => {
-    const isRegenerate = allStartFramesGenerated;
-    
-    let shotsToProcess = [];
-    if (isRegenerate) {
-      showAlert("确定要重新生成所有镜头的首帧吗？这将覆盖现有图片。", {
-        type: 'warning',
-        showCancel: true,
-        onConfirm: async () => {
-          shotsToProcess = [...project.shots];
-          await executeBatchGenerate(shotsToProcess, isRegenerate);
-        }
-      });
+    const shotsToProcess = project.shots.filter(
+      (s) => !s.keyframes?.find((k) => k.type === 'start')?.imageUrl
+    );
+
+    if (shotsToProcess.length === 0) {
+      setToastMessage('所有首帧已生成。如需重做，请点进镜头后手动单张重新生成。');
       return;
-    } else {
-      shotsToProcess = project.shots.filter(s => !s.keyframes?.find(k => k.type === 'start')?.imageUrl);
     }
-    
-    if (shotsToProcess.length === 0) return;
-    await executeBatchGenerate(shotsToProcess, isRegenerate);
+
+    await executeBatchGenerate(shotsToProcess);
   };
 
-  const executeBatchGenerate = async (shotsToProcess: any[], isRegenerate: boolean) => {
-    setBatchProgress({ 
-      current: 0, 
-      total: shotsToProcess.length, 
-      message: isRegenerate ? "正在重新生成所有首帧..." : "正在批量生成缺失的首帧..." 
+  const executeBatchGenerate = async (shotsToProcess: Shot[]) => {
+    setBatchProgress({
+      current: 0,
+      total: shotsToProcess.length,
+      message: '正在批量生成缺失的首帧...',
     });
 
+    let processed = 0;
     for (let i = 0; i < shotsToProcess.length; i++) {
-      if (i > 0) await delay(DEFAULTS.batchGenerateDelay);
-      
-      const shot = shotsToProcess[i];
-      setBatchProgress({ 
-        current: i + 1, 
-        total: shotsToProcess.length, 
-        message: `正在生成镜头 ${i+1}/${shotsToProcess.length}...` 
+      const queuedShot = shotsToProcess[i];
+      // 每次用最新状态判断，避免批量过程中手动生成成功的镜头被重复入队
+      const freshShot = projectRef.current.shots.find((s) => s.id === queuedShot.id) || queuedShot;
+      const hasStartImage = !!freshShot.keyframes?.find((k) => k.type === 'start')?.imageUrl;
+      if (hasStartImage) {
+        continue;
+      }
+
+      if (processed > 0) await delay(DEFAULTS.batchGenerateDelay);
+      processed += 1;
+
+      setBatchProgress({
+        current: processed,
+        total: shotsToProcess.length,
+        message: `正在生成镜头 ${processed}/${shotsToProcess.length}...`,
       });
-      
+
       try {
-        await handleGenerateKeyframe(shot, 'start');
+        await handleGenerateKeyframe(freshShot, 'start');
       } catch (e: any) {
-        console.error(`Failed to generate for shot ${shot.id}`, e);
+        console.error(`Failed to generate for shot ${freshShot.id}`, e);
         if (onApiKeyError && onApiKeyError(e)) {
           setBatchProgress(null);
           return;
@@ -1787,15 +1802,24 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError,
           </span>
           <button 
             onClick={handleBatchGenerateImages}
-            disabled={!!batchProgress}
+            disabled={!!batchProgress || allStartFramesGenerated}
+            title={
+              allStartFramesGenerated
+                ? '所有首帧已生成，如需重做请点进镜头手动单张重新生成'
+                : `仅生成尚未出图的首帧（剩余 ${missingStartFrameCount} 个）`
+            }
             className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-all flex items-center gap-2 ${
               allStartFramesGenerated
-                ? 'bg-[var(--bg-surface)] text-[var(--text-tertiary)] border border-[var(--border-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-secondary)]'
+                ? 'bg-[var(--bg-surface)] text-[var(--text-tertiary)] border border-[var(--border-secondary)] cursor-not-allowed opacity-70'
                 : 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] hover:bg-[var(--btn-primary-hover)] shadow-lg shadow-[var(--btn-primary-shadow)]'
             }`}
           >
             <Sparkles className="w-3 h-3" />
-            {allStartFramesGenerated ? '重新生成所有首帧' : '批量生成首帧'}
+            {allStartFramesGenerated
+              ? '首帧已全部生成'
+              : missingStartFrameCount > 0
+                ? `批量生成首帧 (${missingStartFrameCount})`
+                : '批量生成首帧'}
           </button>
         </div>
       </div>

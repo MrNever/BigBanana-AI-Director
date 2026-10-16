@@ -61,7 +61,14 @@ const PLACEHOLDER_PATTERNS = [
   /待填写/,
 ];
 
-const REPEATED_SYMBOLS_PATTERN = /([,.!?;:])\1{2,}/;
+// 允许常见省略号 `...` / `……`；仅标记明显异常的重复标点（如 ,,, / !!!! / ....）
+const REPEATED_SYMBOLS_PATTERN = /([,!?;:，！？；：])\1{2,}|(\.)\2{3,}/;
+
+const SEVERITY_LABEL: Record<PromptLintSeverity, string> = {
+  error: '错误',
+  warning: '警告',
+  info: '提示',
+};
 
 const normalizePrompt = (prompt?: string) => (prompt || '').trim();
 
@@ -101,8 +108,8 @@ export const lintPromptText = (
       issues.push({
         code: 'empty-prompt',
         severity: 'error',
-        message: 'Prompt is empty.',
-        suggestion: 'Provide a clear visual/action description before generating.',
+        message: '提示词为空。',
+        suggestion: '生成前请先填写清晰的画面/动作描述。',
       });
     }
     return buildLintResult(issues);
@@ -112,8 +119,8 @@ export const lintPromptText = (
     issues.push({
       code: 'prompt-too-short',
       severity: 'warning',
-      message: `Prompt is very short (${normalized.length} chars).`,
-      suggestion: 'Add scene details, subject action, and composition clues.',
+      message: `提示词过短（${normalized.length} 字符）。`,
+      suggestion: '补充场景细节、主体动作与构图线索。',
     });
   }
 
@@ -121,8 +128,8 @@ export const lintPromptText = (
     issues.push({
       code: 'prompt-too-long',
       severity: 'warning',
-      message: `Prompt is very long (${normalized.length} chars).`,
-      suggestion: 'Remove duplicated phrases and keep only actionable details.',
+      message: `提示词过长（${normalized.length} 字符）。`,
+      suggestion: '删除重复表述，只保留可执行的画面细节。',
     });
   }
 
@@ -130,8 +137,8 @@ export const lintPromptText = (
     issues.push({
       code: 'placeholder-text',
       severity: 'warning',
-      message: 'Prompt still contains placeholder text.',
-      suggestion: 'Replace placeholders with concrete visual instructions.',
+      message: '提示词中仍包含占位文本。',
+      suggestion: '将占位内容替换为具体的视觉描述。',
     });
   }
 
@@ -139,8 +146,8 @@ export const lintPromptText = (
     issues.push({
       code: 'repeated-symbols',
       severity: 'info',
-      message: 'Prompt has repeated punctuation symbols.',
-      suggestion: 'Clean punctuation to improve prompt readability.',
+      message: '提示词存在异常重复标点。',
+      suggestion: '清理多余标点，提高提示词可读性。',
     });
   }
 
@@ -158,8 +165,8 @@ export const runKeyframePreflight = (input: KeyframePreflightInput): PromptLintR
     issues.push({
       code: 'unsupported-aspect-ratio',
       severity: 'error',
-      message: `Aspect ratio ${input.aspectRatio} is not supported by current image model.`,
-      suggestion: `Use one of: ${input.supportedAspectRatios.join(', ')}`,
+      message: `当前图片模型不支持画幅 ${input.aspectRatio}。`,
+      suggestion: `请改用：${input.supportedAspectRatios.join(', ')}`,
     });
   }
 
@@ -167,8 +174,8 @@ export const runKeyframePreflight = (input: KeyframePreflightInput): PromptLintR
     issues.push({
       code: 'negative-conflict-human',
       severity: 'warning',
-      message: 'Negative prompt contains human-exclusion terms while shot has characters.',
-      suggestion: 'Remove person/human exclusion tokens for character shots.',
+      message: '负面提示词含“排除人物”类词，但本镜头绑定了角色。',
+      suggestion: '角色镜头请去掉 person/human 等排除人物词。',
     });
   }
 
@@ -176,8 +183,8 @@ export const runKeyframePreflight = (input: KeyframePreflightInput): PromptLintR
     issues.push({
       code: 'no-reference-images',
       severity: 'warning',
-      message: 'No reference images provided for this keyframe.',
-      suggestion: 'Attach scene/character/prop references to improve consistency.',
+      message: '本关键帧未提供参考图。',
+      suggestion: '建议绑定场景/角色/道具参考图，提升一致性。',
     });
   }
 
@@ -185,8 +192,8 @@ export const runKeyframePreflight = (input: KeyframePreflightInput): PromptLintR
     issues.push({
       code: 'end-without-start-image',
       severity: 'warning',
-      message: 'Generating end frame without an existing start-frame image.',
-      suggestion: 'Generate or upload start frame first for better continuity.',
+      message: '尚未有起始帧图片就开始生成结束帧。',
+      suggestion: '建议先生成或上传起始帧，以保证连贯性。',
     });
   }
 
@@ -201,8 +208,8 @@ export const runVideoPreflight = (input: VideoPreflightInput): PromptLintResult 
     issues.push({
       code: 'missing-start-frame',
       severity: 'error',
-      message: 'Missing start frame image.',
-      suggestion: 'Generate or upload a start frame before video generation.',
+      message: '缺少起始帧图片。',
+      suggestion: '生成视频前请先生成或上传起始帧。',
     });
   }
 
@@ -213,8 +220,8 @@ export const runVideoPreflight = (input: VideoPreflightInput): PromptLintResult 
     issues.push({
       code: 'unsupported-video-aspect-ratio',
       severity: 'error',
-      message: `Aspect ratio ${input.aspectRatio} is not supported by model ${input.modelId}.`,
-      suggestion: `Use one of: ${input.supportedAspectRatios.join(', ')}`,
+      message: `模型 ${input.modelId} 不支持画幅 ${input.aspectRatio}。`,
+      suggestion: `请改用：${input.supportedAspectRatios.join(', ')}`,
     });
   }
 
@@ -225,8 +232,8 @@ export const runVideoPreflight = (input: VideoPreflightInput): PromptLintResult 
     issues.push({
       code: 'unsupported-video-duration',
       severity: 'error',
-      message: `Duration ${input.duration}s is not supported by model ${input.modelId}.`,
-      suggestion: `Use one of: ${input.supportedDurations.join(', ')} seconds`,
+      message: `模型 ${input.modelId} 不支持时长 ${input.duration} 秒。`,
+      suggestion: `请改用：${input.supportedDurations.join(', ')} 秒`,
     });
   }
 
@@ -234,7 +241,7 @@ export const runVideoPreflight = (input: VideoPreflightInput): PromptLintResult 
     issues.push({
       code: 'end-frame-ignored',
       severity: 'info',
-      message: `Model ${input.modelId} uses start-frame only; end frame will be ignored.`,
+      message: `模型 ${input.modelId} 仅使用起始帧，结束帧将被忽略。`,
     });
   }
 
@@ -242,7 +249,13 @@ export const runVideoPreflight = (input: VideoPreflightInput): PromptLintResult 
 };
 
 export const formatLintIssues = (issues: PromptLintIssue[]): string =>
-  issues.map((issue) => `- [${issue.severity}] ${issue.message}`).join('\n');
+  issues
+    .map((issue) => `- [${SEVERITY_LABEL[issue.severity]}] ${issue.message}`)
+    .join('\n');
+
+/** 仅返回需要用户关注的问题（警告及以上），info 不弹 toast */
+export const getActionableLintIssues = (issues: PromptLintIssue[]): PromptLintIssue[] =>
+  issues.filter((issue) => issue.severity === 'error' || issue.severity === 'warning');
 
 const buildLintResult = (issues: PromptLintIssue[]): PromptLintResult => {
   const errorCount = issues.filter((issue) => issue.severity === 'error').length;
@@ -254,4 +267,3 @@ const buildLintResult = (issues: PromptLintIssue[]): PromptLintResult => {
     canProceed: errorCount === 0,
   };
 };
-
